@@ -1,8 +1,10 @@
-# step4c.py
+
 import dns.resolver
 import requests
 import random
 import string
+import concurrent.futures
+import threading
 
 def resolve(hostname: str):
     try:
@@ -28,7 +30,6 @@ def random_subdomain_label(length: int = 15) -> str:
     return ''.join(random.choices(string.ascii_lowercase + string.digits, k=length))
 
 def check_wildcard(domain: str, attempts: int = 3):
-    
     wildcard_ips = set()
     for _ in range(attempts):
         junk_host = f"{random_subdomain_label()}.{domain}"
@@ -38,7 +39,6 @@ def check_wildcard(domain: str, attempts: int = 3):
     return wildcard_ips
 
 def get_wildcard_http_signature(domain: str, attempts: int = 3):
-   
     signatures = set()
     for _ in range(attempts):
         junk_host = f"{random_subdomain_label()}.{domain}"
@@ -51,7 +51,7 @@ def load_wordlist(path: str) -> list[str]:
     with open(path) as f:
         return [line.strip() for line in f if line.strip()]
 
-def brute_force(domain: str, wordlist_path: str):
+def brute_force(domain: str, wordlist_path: str, threads: int = 30):
     words = load_wordlist(wordlist_path)
 
     print(f"[*] Checking {domain} for wildcard DNS...")
@@ -60,46 +60,53 @@ def brute_force(domain: str, wordlist_path: str):
     wildcard_sigs = set()
     if wildcard_ips:
         print(f"[!] Wildcard DNS detected. Pool of IPs: {wildcard_ips}")
-        print(f"[*] Fetching HTTP fingerprint of wildcard responses...")
         wildcard_sigs = get_wildcard_http_signature(domain)
-        print(f"[!] Wildcard HTTP fingerprint(s): {wildcard_sigs}")
-        print(f"[!] Only candidates whose HTTP signature DIFFERS from these will be kept\n")
+        print(f"[!] Wildcard HTTP fingerprint(s): {wildcard_sigs}\n")
     else:
-        print(f"[*] No wildcard DNS detected. Trusting DNS resolution alone, skipping HTTP checks.\n")
+        print(f"[*] No wildcard DNS detected. Skipping HTTP checks.\n")
 
-    print(f"[*] Loaded {len(words)} words. Starting brute-force against {domain}...\n")
+    print(f"[*] Loaded {len(words)} words. Starting brute-force ({threads} threads) against {domain}...\n")
 
     found = {}
     filtered_count = 0
+    lock = threading.Lock()  
 
-    for word in words:
+    def worker(word: str):
+        nonlocal filtered_count
         candidate = f"{word}.{domain}"
         ips = resolve(candidate)
 
         if ips is None:
-            print(f"[-] {candidate}")
-            continue
+            return  
 
         if not wildcard_ips:
-            print(f"[+] {candidate} -> {ips}")
-            found[candidate] = {"ips": ips}
-            continue
+            with lock:
+                print(f"[+] {candidate} -> {ips}")
+                found[candidate] = {"ips": ips}
+            return
 
         sig = get_http_signature(candidate)
 
-        if sig and sig in wildcard_sigs:
-            print(f"[~] {candidate} -> {ips}  HTTP {sig} (filtered: matches wildcard fingerprint)")
-            filtered_count += 1
-            continue
+        with lock:
+            if sig and sig in wildcard_sigs:
+                print(f"[~] {candidate} -> {ips}  HTTP {sig} (filtered)")
+                filtered_count += 1
+            else:
+                print(f"[+] {candidate} -> {ips}  HTTP {sig}")
+                found[candidate] = {"ips": ips, "http_signature": sig}
 
-        print(f"[+] {candidate} -> {ips}  HTTP {sig}")
-        found[candidate] = {"ips": ips, "http_signature": sig}
+    with concurrent.futures.ThreadPoolExecutor(max_workers=threads) as executor:
+        executor.map(worker, words)
 
     print(f"\n[*] Done. Found {len(found)} real subdomains ({filtered_count} filtered as wildcard noise).")
     return found
 
 if __name__ == "__main__":
-    results = brute_force("google.com", "wordlist.txt")
-    print()
+    import time
+    start = time.time()
+    results = brute_force("github.io", "wordlist.txt", threads=30)
+    elapsed = time.time() - start
+
+    print(f"\n[*] Took {elapsed:.2f} seconds")
     for sub, data in results.items():
         print(f"    {sub} -> {data}")
