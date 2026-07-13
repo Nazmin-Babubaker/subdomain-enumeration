@@ -5,6 +5,8 @@ import random
 import string
 import concurrent.futures
 import threading
+import argparse
+
 
 def resolve(hostname: str):
     try:
@@ -101,12 +103,34 @@ def brute_force(domain: str, wordlist_path: str, threads: int = 30):
     print(f"\n[*] Done. Found {len(found)} real subdomains ({filtered_count} filtered as wildcard noise).")
     return found
 
-if __name__ == "__main__":
+def main():
+    parser = argparse.ArgumentParser(
+        description="Subdomain enumeration tool — brute-force with wildcard detection"
+    )
+    parser.add_argument(
+        "domain",
+        help="Target domain to enumerate (e.g. example.com)"
+    )
+    parser.add_argument(
+        "-w", "--wordlist",
+        default="wordlist.txt",
+        help="Path to wordlist file (default: wordlist.txt)"
+    )
+    parser.add_argument(
+        "-t", "--threads",
+        type=int,
+        default=30,
+        help="Number of concurrent threads (default: 30)"
+    )
+
+    args = parser.parse_args()
+
     import time
     start = time.time()
-    results = brute_force("github.io", "wordlist.txt", threads=30)
+    results = brute_force(args.domain, args.wordlist, threads=args.threads)
     elapsed = time.time() - start
 
     print(f"\n[*] Took {elapsed:.2f} seconds")
-    for sub, data in results.items():
-        print(f"    {sub} -> {data}")
+
+if __name__ == "__main__":
+    main()
